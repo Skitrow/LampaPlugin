@@ -32,9 +32,9 @@
             if (!el) {
                 el = document.createElement('div');
                 el.id = 'qb-debug-panel';
-                el.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,0.88);' +
-                    'color:#0f0;font-size:15px;line-height:1.3;padding:6px 10px;z-index:999999;' +
-                    'max-height:38vh;overflow:auto;white-space:pre-wrap;font-family:monospace;';
+                el.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,0.92);' +
+                    'color:#0f0;font-size:12px;line-height:1.25;padding:4px 8px;z-index:999999;' +
+                    'max-height:75vh;overflow:auto;white-space:pre-wrap;font-family:monospace;';
                 (document.body || document.documentElement).appendChild(el);
             }
             var line = document.createElement('div');
@@ -132,9 +132,8 @@
             get(cat.code, page, function (json) {
                 var results = (json && json.results) || [];
 
-                if (DEBUG && page === 1) {
-                    Lampa.Noty.show('[qb] ' + cat.code + ' page1: ' + results.length + ' items' +
-                        (results.length ? ' sample=' + JSON.stringify(results[0]).slice(0, 200) : ''));
+                if (page === 1) {
+                    dbg('[qb] ' + cat.code + ' page1 raw=' + JSON.stringify(json).slice(0, 250));
                 }
 
                 if (!results.length) { onCatDone(); return; }
@@ -145,7 +144,7 @@
 
                 loadPage(page + 1);
             }, function (err) {
-                if (DEBUG) Lampa.Noty.show('[qb] ' + cat.code + ' FAILED: ' + JSON.stringify(err).slice(0, 150));
+                dbg('[qb] ' + cat.code + ' page' + page + ' FAILED: ' + JSON.stringify(err).slice(0, 150));
                 onCatDone(); // помилку/кінець категорії просто пропускаємо
             });
         }
@@ -255,22 +254,7 @@
                 dbg('[qb] building index for movie.id=' + movie.id);
 
                 var render = e.object.activity.render();
-
-                try {
-                    var img = render.find('img').first();
-                    var chain = [];
-                    var el = img;
-                    for (var i = 0; i < 6 && el && el.length; i++) {
-                        var tag = (el.prop('tagName') || '?').toLowerCase();
-                        var cls = el.attr('class') || '';
-                        chain.push(tag + '.' + cls);
-                        el = el.parent();
-                    }
-                    dbg('[qb] DOM chain: ' + chain.join(' < '));
-                    dbg('[qb] selector hits: new=' + render.find('.full-start-new__poster').length + ' old=' + render.find('.full-start__poster').length + ' imgs=' + render.find('img').length);
-                } catch (domErr) {
-                    dbg('[qb] DOM dump error: ' + domErr.message);
-                }
+                dbg('[qb] api_url=' + api_url);
 
                 ensureIndex(function (index) {
                     dbg('[qb] index ready: id-count=' + Object.keys(index.id || {}).length + ' title-count=' + Object.keys(index.title || {}).length);
