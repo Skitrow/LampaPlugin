@@ -235,6 +235,24 @@
 
             var render = e.object.activity.render();
 
+            if (DEBUG) {
+                try {
+                    var img = render.find('img').first();
+                    var chain = [];
+                    var el = img;
+                    for (var i = 0; i < 6 && el && el.length; i++) {
+                        var tag = (el.prop('tagName') || '?').toLowerCase();
+                        var cls = el.attr('class') || '';
+                        chain.push(tag + '.' + cls);
+                        el = el.parent();
+                    }
+                    Lampa.Noty.show('[qb] DOM chain: ' + chain.join(' < '));
+                    Lampa.Noty.show('[qb] selector hits: new=' + render.find('.full-start-new__poster').length + ' old=' + render.find('.full-start__poster').length + ' imgs=' + render.find('img').length);
+                } catch (domErr) {
+                    Lampa.Noty.show('[qb] DOM dump error: ' + domErr.message);
+                }
+            }
+
             ensureIndex(function (index) {
                 if (DEBUG) Lampa.Noty.show('[qb] index ready: id-count=' + Object.keys(index.id || {}).length + ' title-count=' + Object.keys(index.title || {}).length);
                 var code = lookup(index, movie);
