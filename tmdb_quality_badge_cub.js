@@ -25,6 +25,25 @@
     var network = new Lampa.Reguest();
     var api_url = Lampa.Utils.protocol() + Lampa.Manifest.cub_domain + '/api/quality/';
 
+    function dbg(msg) {
+        if (!DEBUG) return;
+        try {
+            var el = document.getElementById('qb-debug-panel');
+            if (!el) {
+                el = document.createElement('div');
+                el.id = 'qb-debug-panel';
+                el.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,0.88);' +
+                    'color:#0f0;font-size:15px;line-height:1.3;padding:6px 10px;z-index:999999;' +
+                    'max-height:38vh;overflow:auto;white-space:pre-wrap;font-family:monospace;';
+                (document.body || document.documentElement).appendChild(el);
+            }
+            var line = document.createElement('div');
+            line.textContent = new Date().toISOString().slice(11, 19) + ' ' + msg;
+            el.appendChild(line);
+            el.scrollTop = el.scrollHeight;
+        } catch (e) {}
+    }
+
     /* ================================================================== *
      * Локалізація
      * ================================================================== */
@@ -215,27 +234,28 @@
      * ================================================================== */
     function startPlugin() {
         injectStyle();
+        dbg('[qb] startPlugin() called');
 
         Lampa.Listener.follow('full', function (e) {
-            if (DEBUG) Lampa.Noty.show('[qb] full event: ' + e.type);
-            if (e.type !== 'complite') return;
+            try {
+                dbg('[qb] full event: ' + e.type);
+                if (e.type !== 'complite') return;
 
-            if (DEBUG) Lampa.Noty.show('[qb] hasToken=' + hasToken() + ' account=' + JSON.stringify(Lampa.Storage.get('account', '{}')).slice(0, 200));
-            if (!hasToken()) return; // без CUB-токена джерела міток немає
+                dbg('[qb] hasToken=' + hasToken() + ' account=' + JSON.stringify(Lampa.Storage.get('account', '{}')).slice(0, 200));
+                if (!hasToken()) return; // без CUB-токена джерела міток немає
 
-            var movie = e.data && e.data.movie;
-            if (!movie || !movie.id) { if (DEBUG) Lampa.Noty.show('[qb] no movie/id'); return; }
+                var movie = e.data && e.data.movie;
+                if (!movie || !movie.id) { dbg('[qb] no movie/id'); return; }
 
-            // Тільки фільми (серіали CUB тут не віддає у форматі quality)
-            var is_tv = (e.object && e.object.method === 'tv') ||
-                !!movie.first_air_date || !!movie.number_of_seasons;
-            if (is_tv) { if (DEBUG) Lampa.Noty.show('[qb] skipped: is_tv'); return; }
+                // Тільки фільми (серіали CUB тут не віддає у форматі quality)
+                var is_tv = (e.object && e.object.method === 'tv') ||
+                    !!movie.first_air_date || !!movie.number_of_seasons;
+                if (is_tv) { dbg('[qb] skipped: is_tv'); return; }
 
-            if (DEBUG) Lampa.Noty.show('[qb] building index for movie.id=' + movie.id);
+                dbg('[qb] building index for movie.id=' + movie.id);
 
-            var render = e.object.activity.render();
+                var render = e.object.activity.render();
 
-            if (DEBUG) {
                 try {
                     var img = render.find('img').first();
                     var chain = [];
@@ -246,22 +266,25 @@
                         chain.push(tag + '.' + cls);
                         el = el.parent();
                     }
-                    Lampa.Noty.show('[qb] DOM chain: ' + chain.join(' < '));
-                    Lampa.Noty.show('[qb] selector hits: new=' + render.find('.full-start-new__poster').length + ' old=' + render.find('.full-start__poster').length + ' imgs=' + render.find('img').length);
+                    dbg('[qb] DOM chain: ' + chain.join(' < '));
+                    dbg('[qb] selector hits: new=' + render.find('.full-start-new__poster').length + ' old=' + render.find('.full-start__poster').length + ' imgs=' + render.find('img').length);
                 } catch (domErr) {
-                    Lampa.Noty.show('[qb] DOM dump error: ' + domErr.message);
+                    dbg('[qb] DOM dump error: ' + domErr.message);
                 }
-            }
 
-            ensureIndex(function (index) {
-                if (DEBUG) Lampa.Noty.show('[qb] index ready: id-count=' + Object.keys(index.id || {}).length + ' title-count=' + Object.keys(index.title || {}).length);
-                var code = lookup(index, movie);
-                if (DEBUG) Lampa.Noty.show('[qb] lookup result: ' + code);
-                if (code) renderBadge(render, code);
-            });
+                ensureIndex(function (index) {
+                    dbg('[qb] index ready: id-count=' + Object.keys(index.id || {}).length + ' title-count=' + Object.keys(index.title || {}).length);
+                    var code = lookup(index, movie);
+                    dbg('[qb] lookup result: ' + code);
+                    if (code) renderBadge(render, code);
+                });
+            } catch (err) {
+                dbg('[qb] FATAL in full-listener: ' + (err && err.message) + ' | ' + (err && err.stack || '').slice(0, 300));
+            }
         });
     }
 
+    dbg('[qb] plugin script loaded, appready=' + window.appready);
     if (window.appready) startPlugin();
     else {
         Lampa.Listener.follow('app', function (e) {
