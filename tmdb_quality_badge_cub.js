@@ -113,8 +113,9 @@
             get(cat.code, page, function (json) {
                 var results = (json && json.results) || [];
 
-                if (DEBUG && page === 1 && results.length) {
-                    console.log('[quality_badge_cub] sample "' + cat.code + '":', results[0]);
+                if (DEBUG && page === 1) {
+                    Lampa.Noty.show('[qb] ' + cat.code + ' page1: ' + results.length + ' items' +
+                        (results.length ? ' sample=' + JSON.stringify(results[0]).slice(0, 200) : ''));
                 }
 
                 if (!results.length) { onCatDone(); return; }
@@ -124,7 +125,8 @@
                 });
 
                 loadPage(page + 1);
-            }, function () {
+            }, function (err) {
+                if (DEBUG) Lampa.Noty.show('[qb] ' + cat.code + ' FAILED: ' + JSON.stringify(err).slice(0, 150));
                 onCatDone(); // помилку/кінець категорії просто пропускаємо
             });
         }
@@ -215,21 +217,28 @@
         injectStyle();
 
         Lampa.Listener.follow('full', function (e) {
+            if (DEBUG) Lampa.Noty.show('[qb] full event: ' + e.type);
             if (e.type !== 'complite') return;
+
+            if (DEBUG) Lampa.Noty.show('[qb] hasToken=' + hasToken() + ' account=' + JSON.stringify(Lampa.Storage.get('account', '{}')).slice(0, 200));
             if (!hasToken()) return; // без CUB-токена джерела міток немає
 
             var movie = e.data && e.data.movie;
-            if (!movie || !movie.id) return;
+            if (!movie || !movie.id) { if (DEBUG) Lampa.Noty.show('[qb] no movie/id'); return; }
 
             // Тільки фільми (серіали CUB тут не віддає у форматі quality)
             var is_tv = (e.object && e.object.method === 'tv') ||
                 !!movie.first_air_date || !!movie.number_of_seasons;
-            if (is_tv) return;
+            if (is_tv) { if (DEBUG) Lampa.Noty.show('[qb] skipped: is_tv'); return; }
+
+            if (DEBUG) Lampa.Noty.show('[qb] building index for movie.id=' + movie.id);
 
             var render = e.object.activity.render();
 
             ensureIndex(function (index) {
+                if (DEBUG) Lampa.Noty.show('[qb] index ready: id-count=' + Object.keys(index.id || {}).length + ' title-count=' + Object.keys(index.title || {}).length);
                 var code = lookup(index, movie);
+                if (DEBUG) Lampa.Noty.show('[qb] lookup result: ' + code);
                 if (code) renderBadge(render, code);
             });
         });
