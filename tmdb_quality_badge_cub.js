@@ -2,47 +2,25 @@
     'use strict';
 
     // Захист від подвійного підключення
-    if (window.plugin_quality_badge_cub_ready) return;
-    window.plugin_quality_badge_cub_ready = true;
+    if (window.plugin_quality_badge_ready) return;
+    window.plugin_quality_badge_ready = true;
 
     /* ================================================================== *
      * НАЛАШТУВАННЯ
      * ================================================================== */
-    var MAX_PAGES = 5; // скільки сторінок кожної категорії тягнути
-    var INDEX_TTL = 1000 * 60 * 60 * 6; // час життя індексу — 6 годин
-    var INDEX_KEY = 'quality_badge_cub_index';
-    var DEBUG = true; // true → лог структури відповіді в консоль
+    var QUALITY_TTL = 1000 * 60 * 60 * 24;      // кеш мітки якості одного фільму — 24 години
+    var IMDB_MAP_TTL = 1000 * 60 * 60 * 24 * 30; // кеш зв'язку tmdb id → imdb id — 30 днів (не змінюється)
 
-    // Категорії CUB від кращої якості до гіршої + ранг (більший = кращий)
-    var CATEGORIES = [
-        { code: 'bd', rank: 4 },
-        { code: 'webdl', rank: 3 },
-        { code: 'hdrip', rank: 2 },
-        { code: 'dvdrip', rank: 1 }
-        // { code: 'update', rank: 0 } // «Оновлення» — не якість; за бажання розкоментуй
+    // Теги якості від кращого до гіршого, з рангом і регуляркою для назви релізу
+    var TAGS = [
+        { code: 'bd', rank: 4, re: /\b(BluRay|BDRip|BRRip|UHD|2160p)\b/i },
+        { code: 'webdl', rank: 3, re: /\bWEB[-.]?(DL|Rip)?\b/i },
+        { code: 'hdrip', rank: 2, re: /\b(HDRip|HDTV)\b/i },
+        { code: 'dvdrip', rank: 1, re: /\b(DVDRip|DVDScr|DVD)\b/i },
+        { code: 'cam', rank: 0, re: /\b(HDCAM|CAM|TELESYNC|TS|TC)\b/i }
     ];
 
     var network = new Lampa.Reguest();
-    var api_url = Lampa.Utils.protocol() + Lampa.Manifest.cub_domain + '/api/quality/';
-
-    function dbg(msg) {
-        if (!DEBUG) return;
-        try {
-            var el = document.getElementById('qb-debug-panel');
-            if (!el) {
-                el = document.createElement('div');
-                el.id = 'qb-debug-panel';
-                el.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:rgba(0,0,0,0.92);' +
-                    'color:#0f0;font-size:12px;line-height:1.25;padding:4px 8px;z-index:999999;' +
-                    'max-height:75vh;overflow:auto;white-space:pre-wrap;font-family:monospace;';
-                (document.body || document.documentElement).appendChild(el);
-            }
-            var line = document.createElement('div');
-            line.textContent = new Date().toISOString().slice(11, 19) + ' ' + msg;
-            el.appendChild(line);
-            el.scrollTop = el.scrollHeight;
-        } catch (e) {}
-    }
 
     /* ================================================================== *
      * Локалізація
@@ -51,18 +29,19 @@
         qb_bd: { uk: 'Blu-Ray', ru: 'Blu-Ray', en: 'Blu-Ray' },
         qb_webdl: { uk: 'WEB-DL', ru: 'WEB-DL', en: 'WEB-DL' },
         qb_hdrip: { uk: 'HD-Rip', ru: 'HD-Rip', en: 'HD-Rip' },
-        qb_dvdrip: { uk: 'DVD-Rip', ru: 'DVD-Rip', en: 'DVD-Rip' }
+        qb_dvdrip: { uk: 'DVD-Rip', ru: 'DVD-Rip', en: 'DVD-Rip' },
+        qb_cam: { uk: 'CAM/TS', ru: 'CAM/TS', en: 'CAM/TS' }
     });
 
     /* ================================================================== *
      * CSS
      * ================================================================== */
     function injectStyle() {
-        if (document.getElementById('quality_badge_cub_style')) return;
+        if (document.getElementById('quality_badge_style')) return;
         var style = document.createElement('style');
-        style.id = 'quality_badge_cub_style';
+        style.id = 'quality_badge_style';
         style.textContent = [
-            '.full-start-new__poster, .full-start__poster { position: relative; }',
+            '.full-start-new__poster, .full-start__poster, .card__view { position: relative; }',
             '.quality-badge {',
             '  position: absolute; top: 0.6em; left: 0.6em;',
             '  padding: 0.3em 0.7em; border-radius: 0.4em;',
@@ -73,159 +52,169 @@
             '.quality-badge--bd { background: #1e88e5; }',
             '.quality-badge--webdl { background: #43a047; }',
             '.quality-badge--hdrip { background: #fdd835; color: #212121; }',
-            '.quality-badge--dvdrip { background: #fb8c00; }'
+            '.quality-badge--dvdrip { background: #fb8c00; }',
+            '.quality-badge--cam { background: #c62828; }',
+            '.quality-badge--mini {',
+            '  top: 0.3em; left: 0.3em; padding: 0.15em 0.45em;',
+            '  font-size: 0.68em; border-radius: 0.3em; box-shadow: 0 1px 4px rgba(0,0,0,.5);',
+            '}'
         ].join('\n');
         document.head.appendChild(style);
     }
 
     /* ================================================================== *
-     * Запит до CUB (тонкий клієнт, з токеном акаунта)
+     * srrDB: пошук релізів фільму за IMDB id (публічне API, без токена)
      * ================================================================== */
-    function hasToken() {
-        var account = Lampa.Storage.get('account', '{}');
-        return !!account.token;
-    }
+    function pickBestTag(results) {
+        var best = null;
+        (results || []).forEach(function (r) {
+            var name = (r && r.release) || '';
+            if (!name || /SUBPACK/i.test(name)) return; // не відео-реліз
 
-    function get(code, page, resolve, reject) {
-        var account = Lampa.Storage.get('account', '{}');
-        if (account.token) {
-            network.silent(api_url + code + '/' + page, resolve, reject, false, {
-                headers: { token: account.token }
-            });
-        } else {
-            reject();
-        }
-    }
-
-    /* ================================================================== *
-     * Побудова індексу id/title → якість
-     * ================================================================== */
-    function titleKey(item) {
-        var t = (item.original_title || item.title || item.name || '')
-            .toString().toLowerCase().trim();
-        if (!t) return null;
-        var date = item.release_date || item.first_air_date || '';
-        var year = date ? ('' + date).slice(0, 4) : '';
-        return t + '|' + year;
-    }
-
-    function addToIndex(item, code, rank, idIndex, titleIndex) {
-        if (!item) return;
-
-        if (item.id != null) {
-            var cur = idIndex[item.id];
-            if (!cur || rank > cur.rank) idIndex[item.id] = { code: code, rank: rank };
-        }
-
-        var key = titleKey(item);
-        if (key) {
-            var c2 = titleIndex[key];
-            if (!c2 || rank > c2.rank) titleIndex[key] = { code: code, rank: rank };
-        }
-    }
-
-    // Послідовно тягне сторінки однієї категорії, доки не порожньо / не MAX_PAGES
-    function fetchCategoryPages(cat, idIndex, titleIndex, onCatDone) {
-        function loadPage(page) {
-            if (page > MAX_PAGES) { onCatDone(); return; }
-
-            get(cat.code, page, function (json) {
-                var results = (json && json.results) || [];
-
-                if (page === 1) {
-                    dbg('[qb] ' + cat.code + ' page1 raw=' + JSON.stringify(json).slice(0, 250));
+            for (var i = 0; i < TAGS.length; i++) {
+                if (TAGS[i].re.test(name)) {
+                    if (!best || TAGS[i].rank > best.rank) best = TAGS[i];
+                    break;
                 }
-
-                if (!results.length) { onCatDone(); return; }
-
-                results.forEach(function (item) {
-                    addToIndex(item, cat.code, cat.rank, idIndex, titleIndex);
-                });
-
-                loadPage(page + 1);
-            }, function (err) {
-                dbg('[qb] ' + cat.code + ' page' + page + ' FAILED: ' + JSON.stringify(err).slice(0, 150));
-                onCatDone(); // помилку/кінець категорії просто пропускаємо
-            });
-        }
-        loadPage(1);
+            }
+        });
+        return best ? best.code : null;
     }
 
-    function buildIndex(done) {
-        var idIndex = {}, titleIndex = {};
-        var remaining = CATEGORIES.length;
+    function srrdbLookupByImdb(imdbId, cb) {
+        var cacheKey = 'quality_badge_srrdb_' + imdbId;
+        var cached = Lampa.Storage.get(cacheKey, null);
+        if (cached && cached.ts && (Date.now() - cached.ts) < QUALITY_TTL) {
+            cb(cached.code);
+            return;
+        }
 
-        CATEGORIES.forEach(function (cat) {
-            fetchCategoryPages(cat, idIndex, titleIndex, function () {
-                remaining--;
-                if (remaining === 0) {
-                    var index = { id: idIndex, title: titleIndex, ts: Date.now() };
-                    Lampa.Storage.set(INDEX_KEY, index);
-                    if (DEBUG) {
-                        console.log('[quality_badge_cub] index built:',
-                            Object.keys(idIndex).length, 'by id,',
-                            Object.keys(titleIndex).length, 'by title');
-                    }
-                    done(index);
-                }
-            });
+        var numeric = imdbId.replace(/^tt/i, '');
+        var url = 'https://api.srrdb.com/v1/search/imdb:' + numeric;
+
+        network.silent(url, function (json) {
+            var code = pickBestTag(json && json.results);
+            Lampa.Storage.set(cacheKey, { code: code, ts: Date.now() });
+            cb(code);
+        }, function () {
+            cb(null);
         });
     }
 
-    /* ================================================================== *
-     * Доступ до індексу (памʼять → Storage → побудова), з чергою очікувачів
-     * ================================================================== */
-    var INDEX = null;
-    var building = false;
-    var waiters = [];
+    // tmdb id -> imdb id (потрібно для карток каталогу, де imdb_id ще не підвантажений)
+    function getImdbId(tmdbId, cb) {
+        var cacheKey = 'quality_badge_imdbmap_' + tmdbId;
+        var cached = Lampa.Storage.get(cacheKey, null);
+        if (cached && cached.ts && (Date.now() - cached.ts) < IMDB_MAP_TTL) {
+            cb(cached.imdb || null);
+            return;
+        }
 
-    function indexFresh(idx) {
-        return idx && idx.ts && (Date.now() - idx.ts) < INDEX_TTL;
-    }
+        var url = Lampa.TMDB.api('movie/' + tmdbId + '/external_ids?api_key=' + Lampa.TMDB.key());
 
-    function ensureIndex(cb) {
-        if (indexFresh(INDEX)) { cb(INDEX); return; }
-
-        var stored = Lampa.Storage.get(INDEX_KEY, null);
-        if (indexFresh(stored)) { INDEX = stored; cb(INDEX); return; }
-
-        waiters.push(cb);
-        if (building) return;
-        building = true;
-
-        buildIndex(function (index) {
-            INDEX = index;
-            building = false;
-            var list = waiters.slice();
-            waiters = [];
-            list.forEach(function (fn) { fn(index); });
+        network.silent(url, function (json) {
+            var imdb = (json && json.imdb_id) || null;
+            Lampa.Storage.set(cacheKey, { imdb: imdb, ts: Date.now() });
+            cb(imdb);
+        }, function () {
+            cb(null);
         });
     }
 
-    /* ================================================================== *
-     * Пошук якості для конкретної картки
-     * ================================================================== */
-    function lookup(index, movie) {
-        if (!index) return null;
-        if (movie.id != null && index.id[movie.id]) return index.id[movie.id].code;
-        var key = titleKey(movie);
-        if (key && index.title[key]) return index.title[key].code;
-        return null;
+    function lookupQuality(data, cb) {
+        if (data.imdb_id) { srrdbLookupByImdb(data.imdb_id, cb); return; }
+        if (!data.id) { cb(null); return; }
+
+        getImdbId(data.id, function (imdb) {
+            if (!imdb) { cb(null); return; }
+            srrdbLookupByImdb(imdb, cb);
+        });
+    }
+
+    function isTv(data) {
+        return !!data.first_air_date || !!data.number_of_seasons;
     }
 
     /* ================================================================== *
      * Малювання бейджа
      * ================================================================== */
-    function renderBadge(render, code) {
-        render = $(render);
-        render.find('.quality-badge').remove();
+    function renderBadgeOn(container, code, mini) {
+        container = $(container);
+        container.find('.quality-badge').remove();
 
-        var badge = $('<div class="quality-badge quality-badge--' + code + '"></div>');
+        var cls = 'quality-badge quality-badge--' + code + (mini ? ' quality-badge--mini' : '');
+        var badge = $('<div class="' + cls + '"></div>');
         badge.text(Lampa.Lang.translate('qb_' + code));
+        container.append(badge);
+    }
 
+    function renderFullBadge(render, code) {
+        render = $(render);
         var poster = render.find('.full-start-new__poster, .full-start__poster').eq(0);
-        if (poster.length) poster.append(badge);
-        else render.find('.full-start-new__rate-line, .full-start__rate').eq(0).append(badge);
+        var target = poster.length ? poster : render.find('.full-start-new__rate-line, .full-start__rate').eq(0);
+        renderBadgeOn(target, code, false);
+    }
+
+    /* ================================================================== *
+     * Бейдж на повній картці фільму
+     * ================================================================== */
+    function startFullListener() {
+        Lampa.Listener.follow('full', function (e) {
+            try {
+                if (e.type !== 'complite') return;
+
+                var movie = e.data && e.data.movie;
+                if (!movie || !movie.id) return;
+                if (isTv(movie)) return; // тільки фільми
+
+                var render = e.object.activity.render();
+
+                lookupQuality(movie, function (code) {
+                    if (code) renderFullBadge(render, code);
+                });
+            } catch (err) {}
+        });
+    }
+
+    /* ================================================================== *
+     * Бейджі на картках каталогу (гортання стрічок)
+     * ================================================================== */
+    function processCardElement(el) {
+        if (el.qb_done) return;
+        el.qb_done = true;
+
+        var data = el.card_data;
+        if (!data || !data.id || !data.poster_path) return; // не фільм/серіал (напр. персона, колекція)
+        if (isTv(data)) return;
+
+        var view = el.querySelector('.card__view');
+        if (!view) return;
+
+        lookupQuality(data, function (code) {
+            if (code) renderBadgeOn(view, code, true);
+        });
+    }
+
+    function scanForCards(root) {
+        if (root.nodeType !== 1) return;
+        if (root.classList && root.classList.contains('card')) processCardElement(root);
+        if (root.querySelectorAll) {
+            var found = root.querySelectorAll('.card');
+            for (var i = 0; i < found.length; i++) processCardElement(found[i]);
+        }
+    }
+
+    function startCardObserver() {
+        var observer = new MutationObserver(function (mutations) {
+            mutations.forEach(function (m) {
+                for (var i = 0; i < m.addedNodes.length; i++) {
+                    scanForCards(m.addedNodes[i]);
+                }
+            });
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+
+        scanForCards(document.body); // на випадок карток, що вже на екрані
     }
 
     /* ================================================================== *
@@ -233,42 +222,10 @@
      * ================================================================== */
     function startPlugin() {
         injectStyle();
-        dbg('[qb] startPlugin() called');
-
-        Lampa.Listener.follow('full', function (e) {
-            try {
-                dbg('[qb] full event: ' + e.type);
-                if (e.type !== 'complite') return;
-
-                dbg('[qb] hasToken=' + hasToken() + ' account=' + JSON.stringify(Lampa.Storage.get('account', '{}')).slice(0, 200));
-                if (!hasToken()) return; // без CUB-токена джерела міток немає
-
-                var movie = e.data && e.data.movie;
-                if (!movie || !movie.id) { dbg('[qb] no movie/id'); return; }
-
-                // Тільки фільми (серіали CUB тут не віддає у форматі quality)
-                var is_tv = (e.object && e.object.method === 'tv') ||
-                    !!movie.first_air_date || !!movie.number_of_seasons;
-                if (is_tv) { dbg('[qb] skipped: is_tv'); return; }
-
-                dbg('[qb] building index for movie.id=' + movie.id);
-
-                var render = e.object.activity.render();
-                dbg('[qb] api_url=' + api_url);
-
-                ensureIndex(function (index) {
-                    dbg('[qb] index ready: id-count=' + Object.keys(index.id || {}).length + ' title-count=' + Object.keys(index.title || {}).length);
-                    var code = lookup(index, movie);
-                    dbg('[qb] lookup result: ' + code);
-                    if (code) renderBadge(render, code);
-                });
-            } catch (err) {
-                dbg('[qb] FATAL in full-listener: ' + (err && err.message) + ' | ' + (err && err.stack || '').slice(0, 300));
-            }
-        });
+        startFullListener();
+        startCardObserver();
     }
 
-    dbg('[qb] plugin script loaded, appready=' + window.appready);
     if (window.appready) startPlugin();
     else {
         Lampa.Listener.follow('app', function (e) {
